@@ -1,0 +1,16 @@
+# systemd unit: copy to /etc/systemd/system/, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now biometric-sync
+[Unit]
+Description=Biometric attendance sync (devices -> Rahma HIS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=frappe
+WorkingDirectory=/opt/biometric-sync
+ExecStart=/opt/biometric-sync/venv/bin/python3 erpnext_sync.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

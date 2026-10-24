@@ -38,3 +38,9 @@ shift_type_device_mapping = [
 #       3. Duplicate Employee Checkin found. (This exception can happen if you have cleared the logs/status.json of this script)
 # Use the corresponding number to ignore the above exceptions. (Default: Ignores all the listed exceptions)
 allowed_exceptions = [1,2,3]
+
+# Report each device's pull to the HIS, so HR sees a device (or this tool) that
+# stopped working: rahma_core.api.biometric_device.report_device_status.
+# The API user above needs create on Employee Checkin -- it already has it.
+REPORT_DEVICE_STATUS = True
+DEVICE_STATUS_ENDPOINT = '/api/method/rahma_core.api.biometric_device.report_device_status'

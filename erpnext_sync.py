@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import logging
+import socket
 from logging.handlers import RotatingFileHandler
 from pickledb import PickleDB
 from zk import ZK, const
@@ -66,8 +67,12 @@ def main():
                     if os.path.exists(dump_file):
                         os.remove(dump_file)
                     info_logger.info("Successfully processed Device: "+ device['device_id'])
-                except:
+                    report_device_status(device, ok=True)
+                except Exception as e:
                     error_logger.exception('exception when calling pull_process_and_push_data function for device'+json.dumps(device, default=str))
+                    # Only a failed pull means the device is down: a failure while posting
+                    # the punches is the HIS's side, and the device itself answered.
+                    report_device_status(device, ok=not str(e).startswith(DEVICE_FETCH_FAILED), error=str(e))
             if hasattr(config,'shift_type_device_mapping'):
                 update_shift_last_sync_timestamp(config.shift_type_device_mapping)
             status.set('mission_accomplished_timestamp', str(datetime.datetime.now()))
@@ -143,6 +148,43 @@ def pull_process_and_push_data(device, device_attendance_logs=None):
                 raise Exception('API Call to ERPNext Failed.')
 
 
+DEVICE_FETCH_FAILED = 'Device fetch failed'
+# device_id -> (number of logs, newest log time) of its last pull, for the status report.
+last_pull = {}
+
+
+def report_device_status(device, ok, error=None):
+    """Tell the HIS how this device's pull went (rahma_core.api.biometric_device).
+
+    Never raises and never delays the sync for long: the report is a courtesy, the
+    punches are the job. Off with REPORT_DEVICE_STATUS = False in local_config.
+    """
+    if not getattr(config, 'REPORT_DEVICE_STATUS', True):
+        return
+    try:
+        count, newest = last_pull.pop(device['device_id'], (None, None))
+        url = config.ERPNEXT_URL + getattr(config, 'DEVICE_STATUS_ENDPOINT', '/api/method/rahma_core.api.biometric_device.report_device_status')
+        headers = {
+            'Authorization': "token " + config.ERPNEXT_API_KEY + ":" + config.ERPNEXT_API_SECRET,
+            'Accept': 'application/json'
+        }
+        data = {
+            'device_id': device['device_id'],
+            'ok': 1 if ok else 0,
+            'error': (error or '')[:900] or None,
+            'ip': device.get('ip'),
+            'logs_pulled': count,
+            'last_log_time': str(newest) if newest else None,
+            'pull_frequency': config.PULL_FREQUENCY,
+            'host': socket.gethostname(),
+        }
+        response = requests.request("POST", url, headers=headers, json=data, timeout=10)
+        if response.status_code != 200:
+            error_logger.error('\t'.join(['Device status report refused.', device['device_id'], str(response.status_code), response.text[:300]]))
+    except Exception:
+        error_logger.exception('exception when reporting device status for ' + str(device.get('device_id')))
+
+
 def get_all_attendance_from_device(ip, port=4370, timeout=30, device_id=None, clear_from_device_on_fetch=False):
     #  Sample Attendance Logs [{'punch': 255, 'user_id': '22', 'uid': 12349, 'status': 1, 'timestamp': datetime.datetime(2019, 2, 26, 20, 31, 29)},{'punch': 255, 'user_id': '7', 'uid': 7, 'status': 1, 'timestamp': datetime.datetime(2019, 2, 26, 20, 31, 36)}]
     zk = ZK(ip, port=port, timeout=timeout)
@@ -155,6 +197,7 @@ def get_all_attendance_from_device(ip, port=4370, timeout=30, device_id=None, cl
         info_logger.info("\t".join((ip, "Device Disable Attempted. Result:", str(x))))
         attendances = conn.get_attendance()
         info_logger.info("\t".join((ip, "Attendances Fetched:", str(len(attendances)))))
+        last_pull[device_id] = (len(attendances), max((a.timestamp for a in attendances), default=None))
         status.set(f'{device_id}_push_timestamp', None)
         status.set(f'{device_id}_pull_timestamp', str(datetime.datetime.now()))
         status.save()
@@ -169,9 +212,10 @@ def get_all_attendance_from_device(ip, port=4370, timeout=30, device_id=None, cl
                 info_logger.info("\t".join((ip, "Attendance Clear Attempted. Result:", str(x))))
         x = conn.enable_device()
         info_logger.info("\t".join((ip, "Device Enable Attempted. Result:", str(x))))
-    except:
+    except Exception as e:
         error_logger.exception(str(ip)+' exception when fetching from device...')
-        raise Exception('Device fetch failed.')
+        # Keep the reason ("timed out", "unauthenticated"...): the HIS shows it to HR.
+        raise Exception(f'{DEVICE_FETCH_FAILED}: {e}')
     finally:
         if conn:
             conn.disconnect()
