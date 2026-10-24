@@ -47,6 +47,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now biometric-sync
   HIS (**Biometric Device**); keep it as it is in the check-ins already synced.
 - `PULL_FREQUENCY` -- minutes between pulls.
 
+In the HIS, turn on **Rahma Settings > Enable Biometric Device Status** -- off,
+the HIS ignores the reports.
+
 Check it: `journalctl -u biometric-sync -f` and `logs/error.log`; in the HIS the
 device turns Online after its first pull.
 
